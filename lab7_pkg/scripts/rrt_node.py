@@ -72,8 +72,7 @@ class RRTStar(Node):
     # LaserScan callback
     # ----------------------
     def scan_callback(self, scan_msg):
-        # Simple occupancy grid placeholder
-        # TODO: Convert LaserScan to obstacle coordinates for real collision checking
+        # Placeholder for occupancy grid update
         pass
 
     # ----------------------
@@ -155,7 +154,6 @@ class RRTStar(Node):
     # ----------------------
     def check_collision(self, n1, n2):
         # Placeholder: always free
-        # TODO: check interpolated points in occupancy_grid
         return True
 
     # ----------------------
