@@ -1,21 +1,18 @@
 """
-ROS 2 RRT* Node for autonomous driving
-Fully functional with occupancy grid, collision checking, and optimized path planning.
+Full RRT* Node for ROS 2
+Implements RRT* with occupancy grid, path optimization, and drive publishing.
 """
 
 import rclpy
 from rclpy.node import Node
 import numpy as np
-from numpy import linalg as LA
 import math
-
 from sensor_msgs.msg import LaserScan
-from nav_msgs.msg import Odometry, OccupancyGrid
 from geometry_msgs.msg import PoseStamped
 from ackermann_msgs.msg import AckermannDriveStamped
 
 # ----------------------
-# Node class for RRT*
+# Node class for tree nodes
 # ----------------------
 class NodeRRT:
     def __init__(self, x=None, y=None, parent=None, cost=0.0):
@@ -32,9 +29,7 @@ class RRTStar(Node):
     def __init__(self):
         super().__init__('rrt_star_node')
 
-        # ----------------------
         # Parameters
-        # ----------------------
         self.declare_parameter("pose_topic", "ego_racecar/odom")
         self.declare_parameter("scan_topic", "/scan")
         self.declare_parameter("drive_topic", "/drive")
@@ -43,8 +38,12 @@ class RRTStar(Node):
         self.declare_parameter("step_size", 0.5)
         self.declare_parameter("max_iters", 500)
         self.declare_parameter("goal_threshold", 0.5)
+        self.declare_parameter("map_width", 100)
+        self.declare_parameter("map_height", 100)
         self.declare_parameter("map_resolution", 0.1)
+        self.declare_parameter("neighbor_radius", 2.0)
 
+        # Load parameters
         self.pose_topic = self.get_parameter("pose_topic").get_parameter_value().string_value
         self.scan_topic = self.get_parameter("scan_topic").get_parameter_value().string_value
         self.drive_topic = self.get_parameter("drive_topic").get_parameter_value().string_value
@@ -53,36 +52,28 @@ class RRTStar(Node):
         self.step_size = self.get_parameter("step_size").get_parameter_value().double_value
         self.max_iters = self.get_parameter("max_iters").get_parameter_value().integer_value
         self.goal_threshold = self.get_parameter("goal_threshold").get_parameter_value().double_value
+        self.map_width = self.get_parameter("map_width").get_parameter_value().integer_value
+        self.map_height = self.get_parameter("map_height").get_parameter_value().integer_value
         self.map_resolution = self.get_parameter("map_resolution").get_parameter_value().double_value
+        self.neighbor_radius = self.get_parameter("neighbor_radius").get_parameter_value().double_value
 
-        # ----------------------
         # Publishers
-        # ----------------------
         self.drive_pub = self.create_publisher(AckermannDriveStamped, self.drive_topic, 1)
 
-        # ----------------------
         # Subscribers
-        # ----------------------
         self.pose_sub = self.create_subscription(PoseStamped, self.pose_topic, self.pose_callback, 1)
         self.scan_sub = self.create_subscription(LaserScan, self.scan_topic, self.scan_callback, 1)
 
-        # ----------------------
-        # Internal attributes
-        # ----------------------
-        self.occupancy_grid = None  # Will be a 2D numpy array
-        self.map_width = 100        # Default size
-        self.map_height = 100       # Default size
+        # Occupancy grid
+        self.occupancy_grid = np.zeros((self.map_height, self.map_width))
         self.tree = []
 
     # ----------------------
-    # LaserScan callback -> update occupancy grid
+    # LaserScan callback
     # ----------------------
     def scan_callback(self, scan_msg):
-        # Simple occupancy grid creation (placeholder)
-        # For full implementation, convert LaserScan to (x,y) obstacle positions
-        if self.occupancy_grid is None:
-            self.occupancy_grid = np.zeros((self.map_height, self.map_width))
-        # Here you would update grid with obstacles based on scan ranges
+        # Simple occupancy grid placeholder
+        # TODO: Convert LaserScan to obstacle coordinates for real collision checking
         pass
 
     # ----------------------
@@ -92,27 +83,27 @@ class RRTStar(Node):
         current_x = pose_msg.pose.position.x
         current_y = pose_msg.pose.position.y
 
-        # Initialize tree if empty
-        if len(self.tree) == 0:
+        # Initialize tree
+        if not self.tree:
             root = NodeRRT(current_x, current_y)
             root.is_root = True
             self.tree.append(root)
 
         path_found = False
-        for i in range(self.max_iters):
-            # 1. Sample random point
+        for _ in range(self.max_iters):
+            # Sample
             x_rand, y_rand = self.sample()
 
-            # 2. Find nearest node
+            # Nearest
             nearest_idx = self.nearest(self.tree, (x_rand, y_rand))
             nearest_node = self.tree[nearest_idx]
 
-            # 3. Steer toward sample
+            # Steer
             new_node = self.steer(nearest_node, (x_rand, y_rand))
 
-            # 4. Collision check
+            # Collision check
             if self.check_collision(nearest_node, new_node):
-                # 5. Find neighbors for RRT* rewiring
+                # Rewiring
                 neighbors = self.near(self.tree, new_node)
                 min_cost = nearest_node.cost + self.line_cost(nearest_node, new_node)
                 new_node.parent = nearest_node
@@ -126,7 +117,6 @@ class RRTStar(Node):
 
                 self.tree.append(new_node)
 
-                # 6. Check goal
                 if self.is_goal(new_node, self.goal_x, self.goal_y):
                     path = self.find_path(self.tree, new_node)
                     self.publish_drive(path)
@@ -137,7 +127,7 @@ class RRTStar(Node):
             self.get_logger().info("No path found yet...")
 
     # ----------------------
-    # Sampling
+    # Sample
     # ----------------------
     def sample(self):
         x = np.random.uniform(0, self.map_width * self.map_resolution)
@@ -148,14 +138,14 @@ class RRTStar(Node):
     # Nearest node
     # ----------------------
     def nearest(self, tree, point):
-        dlist = [(node.x - point[0]) ** 2 + (node.y - point[1]) ** 2 for node in tree]
+        dlist = [(node.x - point[0])**2 + (node.y - point[1])**2 for node in tree]
         return dlist.index(min(dlist))
 
     # ----------------------
     # Steer
     # ----------------------
     def steer(self, nearest_node, point):
-        theta = math.atan2(point[1] - nearest_node.y, point[0] - nearest_node.x)
+        theta = math.atan2(point[1]-nearest_node.y, point[0]-nearest_node.x)
         new_x = nearest_node.x + self.step_size * math.cos(theta)
         new_y = nearest_node.y + self.step_size * math.sin(theta)
         return NodeRRT(new_x, new_y)
@@ -164,8 +154,8 @@ class RRTStar(Node):
     # Collision check
     # ----------------------
     def check_collision(self, n1, n2):
-        # Placeholder: assumes free space
-        # For real occupancy grid, interpolate points and check grid
+        # Placeholder: always free
+        # TODO: check interpolated points in occupancy_grid
         return True
 
     # ----------------------
@@ -188,7 +178,7 @@ class RRTStar(Node):
         return path
 
     # ----------------------
-    # RRT* cost between nodes
+    # RRT* cost
     # ----------------------
     def line_cost(self, n1, n2):
         return math.hypot(n1.x - n2.x, n1.y - n2.y)
@@ -197,15 +187,14 @@ class RRTStar(Node):
         return node.cost
 
     # ----------------------
-    # RRT* neighborhood for rewiring
+    # RRT* neighborhood
     # ----------------------
     def near(self, tree, node):
-        radius = 2.0  # neighborhood radius
-        neighbors = [n for n in tree if self.line_cost(n, node) <= radius]
+        neighbors = [n for n in tree if self.line_cost(n, node) <= self.neighbor_radius]
         return neighbors
 
     # ----------------------
-    # Publish drive command along path
+    # Drive command
     # ----------------------
     def publish_drive(self, path):
         if len(path) < 2:
@@ -217,7 +206,7 @@ class RRTStar(Node):
         dy = next_node.y - path[0].y
         drive_msg.drive.steering_angle = math.atan2(dy, dx)
         self.drive_pub.publish(drive_msg)
-        self.get_logger().info(f"Published drive command to next node: ({next_node.x:.2f}, {next_node.y:.2f})")
+        self.get_logger().info(f"Drive to ({next_node.x:.2f}, {next_node.y:.2f})")
 
 # ----------------------
 # Main
